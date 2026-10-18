@@ -16,14 +16,18 @@ def png() -> bytes:
 
 
 class FakeWB:
-    def __init__(self, fail_box_once=False):
-        self.calls, self.fail_box_once = [], fail_box_once
+    def __init__(self, fail_box_once=False, stale_supply=False):
+        self.calls, self.fail_box_once, self.stale = [], fail_box_once, stale_supply
+        self.n = 0
 
     async def create_supply(self, name):
+        self.n += 1
         self.calls.append(("supply", name))
-        return "WB-GI-1"
+        return f"WB-GI-{self.n}"
 
     async def add_order(self, s, o):
+        if self.stale and s == "WB-GI-STALE":
+            raise WBError("404", 404)
         self.calls.append(("add", s, o))
 
     async def create_box(self, s):
@@ -58,3 +62,12 @@ def test_pdf_has_three_pages_per_supply():
     item = {"order_png": png(), "sku": "2000000000001", "article": "ART-1", "box_png": png()}
     pdf = build_pdf([item, item])
     assert pdf.startswith(b"%PDF") and pdf.count(b"/Type /Page\n") + pdf.count(b"/Type /Page ") >= 6
+
+
+@pytest.mark.asyncio
+async def test_stale_supply_is_recreated_on_404():
+    wb, db = FakeWB(stale_supply=True), Db(":memory:")
+    db.ensure(5, "ART-1", "2000000000001")
+    db.set_supply(5, "WB-GI-STALE")
+    await move_to_assembly(wb, db, ORDER)
+    assert db.get(5)["supply_id"] == "WB-GI-1" and db.get(5)["added"] == 1

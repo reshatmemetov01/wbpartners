@@ -31,6 +31,12 @@ class Db:
     def set_supply(self, order_id: int, supply_id: str) -> None:
         self._update(order_id, "supply_id", supply_id)
 
+    def reset_supply(self, order_id: int) -> None:
+        self._c.execute(
+            "UPDATE items SET supply_id=NULL, added=0, trbx_id=NULL WHERE order_id=?", (order_id,)
+        )
+        self._c.commit()
+
     def set_added(self, order_id: int) -> None:
         self._update(order_id, "added", 1)
 

@@ -22,7 +22,9 @@ MAX_RETRIES = 5
 
 
 class WBError(RuntimeError):
-    pass
+    def __init__(self, msg: str, status: int | None = None):
+        super().__init__(msg)
+        self.status = status
 
 
 class WBClient:
@@ -41,7 +43,7 @@ class WBClient:
                 await asyncio.sleep(float(r.headers.get("X-Ratelimit-Retry", 1)) + attempt)
                 continue
             if r.status_code >= 400:
-                raise WBError(f"{method} {url} -> {r.status_code}: {r.text[:300]}")
+                raise WBError(f"{method} {url} -> {r.status_code}: {r.text[:300]}", r.status_code)
             return r
         raise WBError(f"{method} {url}: превышен лимит запросов")
 
