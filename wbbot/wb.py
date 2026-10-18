@@ -13,7 +13,6 @@ BASE_URL = "https://marketplace-api.wildberries.ru"
 NEW_ORDERS = "/api/v3/orders/new"
 SUPPLIES = "/api/v3/supplies"
 SUPPLY_ADD_ORDERS = "/api/marketplace/v3/supplies/{supply_id}/orders"
-SUPPLY_ADD_ORDER_OLD = "/api/v3/supplies/{supply_id}/orders/{order_id}"
 SUPPLY_TRBX = "/api/v3/supplies/{supply_id}/trbx"
 SUPPLY_TRBX_STICKERS = "/api/v3/supplies/{supply_id}/trbx/stickers"
 ORDER_STICKERS = "/api/v3/orders/stickers"
@@ -55,18 +54,11 @@ class WBClient:
         return r.json()["id"]
 
     async def add_order(self, supply_id: str, order_id: int) -> None:
-        try:
-            await self._request(
-                "PATCH",
-                SUPPLY_ADD_ORDERS.format(supply_id=supply_id),
-                json={"orders": [order_id]},
-            )
-        except WBError as e:
-            if "404" not in str(e):
-                raise
-            await self._request(
-                "PATCH", SUPPLY_ADD_ORDER_OLD.format(supply_id=supply_id, order_id=order_id)
-            )
+        await self._request(
+            "PATCH",
+            SUPPLY_ADD_ORDERS.format(supply_id=supply_id),
+            json={"orders": [order_id]},
+        )
 
     async def create_box(self, supply_id: str) -> str:
         r = await self._request(
@@ -87,7 +79,7 @@ class WBClient:
         r = await self._request(
             "POST",
             SUPPLY_TRBX_STICKERS.format(supply_id=supply_id),
-            params={"type": "png", "width": STICKER_W, "height": STICKER_H},
+            params={"type": "png"},
             json={"trbxIds": [trbx_id]},
         )
         return base64.b64decode(r.json()["stickers"][0]["file"])
