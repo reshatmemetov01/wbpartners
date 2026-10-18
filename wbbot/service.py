@@ -61,3 +61,17 @@ async def refresh_assembling(wb: WBClient, db: Db) -> list:
     if gone:
         db.remove(gone)
     return [r for r in rows if r["order_id"] not in gone]
+
+
+async def deliver_all(wb: WBClient, db: Db, rows: list) -> tuple[int, list[str]]:
+    """Передаёт поставки в доставку; успешно переданные убирает из списка «На сборке»."""
+    done, errors = [], []
+    for r in rows:
+        try:
+            await wb.deliver(r["supply_id"])
+            done.append(r["order_id"])
+        except WBError as e:
+            errors.append(f"#{r['order_id']} ({r['supply_id']}): {e}")
+    if done:
+        db.remove(done)
+    return len(done), errors

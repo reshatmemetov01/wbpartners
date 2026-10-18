@@ -16,7 +16,7 @@ from aiogram.types import (
 from .config import Config, load_config
 from .db import Db
 from .pdf import build_pdf
-from .service import move_to_assembly, refresh_assembling
+from .service import deliver_all, move_to_assembly, refresh_assembling
 from .wb import WBClient, WBError
 
 MENU = ReplyKeyboardMarkup(
@@ -106,7 +106,38 @@ def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
         text = "На сборке:\n" + "\n".join(
             f"{x['article']} · заказ #{x['order_id']} · {x['supply_id']}" for x in rows
         )
-        await m.answer(text[:4000], reply_markup=ikb([("Получить стикеры", "stickers")]))
+        await m.answer(text[:4000], reply_markup=ikb(
+                [("Получить стикеры", "stickers")], [("Передать все в доставку", "deliver_ask")]
+            ),
+        )
+
+    @r.callback_query(F.data == "deliver_ask")
+    async def deliver_ask(cb: CallbackQuery):
+        rows = await refresh_assembling(wb, db)
+        if not rows:
+            await cb.answer()
+            return await cb.message.answer("На сборке ничего нет.")
+        await cb.message.answer(
+            f"Передать в доставку {len(rows)} поставок? После этого изменить их будет нельзя.",
+            reply_markup=ikb([(f"Да, передать {len(rows)}", "deliver_yes"), ("Отмена", "deliver_no")]),
+        )
+        await cb.answer()
+
+    @r.callback_query(F.data == "deliver_no")
+    async def deliver_no(cb: CallbackQuery):
+        await cb.message.edit_text("Отменено.")
+        await cb.answer()
+
+    @r.callback_query(F.data == "deliver_yes")
+    async def deliver_yes(cb: CallbackQuery):
+        await cb.message.edit_text("Передаю в доставку…")
+        await cb.answer()
+        rows = await refresh_assembling(wb, db)
+        ok, errors = await deliver_all(wb, db, rows)
+        msg = f"Передано в доставку: {ok}"
+        if errors:
+            msg += "\nОшибки:\n" + "\n".join(errors)[:3000]
+        await cb.message.answer(msg)
 
     @r.callback_query(F.data == "stickers")
     async def stickers(cb: CallbackQuery):

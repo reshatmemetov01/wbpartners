@@ -17,6 +17,7 @@ SUPPLY_TRBX = "/api/v3/supplies/{supply_id}/trbx"
 SUPPLY_TRBX_STICKERS = "/api/v3/supplies/{supply_id}/trbx/stickers"
 ORDER_STICKERS = "/api/v3/orders/stickers"
 ORDERS_STATUS = "/api/v3/orders/status"
+SUPPLY_DELIVER = "/api/v3/supplies/{supply_id}/deliver"
 CARDS_LIST = "https://content-api.wildberries.ru/content/v2/get/cards/list"
 SELLER_INFO = "https://common-api.wildberries.ru/api/v1/seller-info"
 
@@ -104,6 +105,9 @@ class WBClient:
             for o in r.json().get("orders", []):
                 out[o["id"]] = o.get("supplierStatus", "")
         return out
+
+    async def deliver(self, supply_id: str) -> None:
+        await self._request("PATCH", SUPPLY_DELIVER.format(supply_id=supply_id))
 
     async def seller_name(self) -> str:
         r = await self._request("GET", SELLER_INFO, retries=1)

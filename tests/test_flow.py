@@ -110,3 +110,24 @@ async def test_refresh_keeps_everything_when_wb_fails():
     db = _db_with(1, 2)
     rows = await refresh_assembling(StatusWB(fail=True), db)
     assert len(rows) == 2 and len(db.assembling()) == 2
+
+
+class DeliverWB:
+    def __init__(self, bad=()):
+        self.bad, self.sent = set(bad), []
+
+    async def deliver(self, supply_id):
+        if supply_id in self.bad:
+            raise WBError("nope", 400)
+        self.sent.append(supply_id)
+
+
+@pytest.mark.asyncio
+async def test_deliver_all_removes_only_delivered():
+    from wbbot.service import deliver_all
+
+    db = _db_with(1, 2, 3)
+    wb = DeliverWB(bad={"S2"})
+    ok, errors = await deliver_all(wb, db, db.assembling())
+    assert ok == 2 and len(errors) == 1 and "#2" in errors[0]
+    assert [r["order_id"] for r in db.assembling()] == [2]
