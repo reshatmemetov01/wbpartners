@@ -37,6 +37,7 @@ def order_line(o: dict) -> str:
 
 def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
     r = Router()
+    info_cache: dict[str, dict] = {}
     r.message.filter(F.from_user.id == cfg.admin_id)
     r.callback_query.filter(F.from_user.id == cfg.admin_id)
 
@@ -110,19 +111,34 @@ def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
     async def stickers(cb: CallbackQuery):
         await cb.answer("Собираю PDF…")
         rows = db.assembling()
+        warn = None
+        try:
+            seller = await wb.seller_name()
+        except WBError as e:
+            seller, warn = "", f"Не удалось получить имя продавца: {e}"
         try:
             data = []
             for x in rows:
+                key = x["sku"] or x["article"]
+                if key not in info_cache:
+                    try:
+                        info_cache[key] = await wb.product_info(x["sku"], x["article"])
+                    except WBError as e:
+                        info_cache[key] = {}
+                        warn = f"Не удалось получить данные карточки (нужен токен с категорией «Контент»): {e}"
                 data.append(
                     {
                         "order_png": await wb.order_sticker(x["order_id"]),
                         "sku": x["sku"],
                         "article": x["article"],
+                        "info": {**info_cache[key], "seller": seller},
                         "box_png": await wb.box_sticker(x["supply_id"], x["trbx_id"]),
                     }
                 )
         except WBError as e:
             return await cb.message.answer(f"Ошибка WB: {e}")
+        if warn:
+            await cb.message.answer(warn[:500])
         pdf = build_pdf(data)
         await cb.message.answer_document(
             BufferedInputFile(pdf, "stickers.pdf"), caption=f"Поставок: {len(rows)}, стикеров: {len(rows) * 3}"

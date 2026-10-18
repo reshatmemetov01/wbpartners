@@ -16,6 +16,8 @@ SUPPLY_ADD_ORDERS = "/api/marketplace/v3/supplies/{supply_id}/orders"
 SUPPLY_TRBX = "/api/v3/supplies/{supply_id}/trbx"
 SUPPLY_TRBX_STICKERS = "/api/v3/supplies/{supply_id}/trbx/stickers"
 ORDER_STICKERS = "/api/v3/orders/stickers"
+CARDS_LIST = "https://content-api.wildberries.ru/content/v2/get/cards/list"
+SELLER_INFO = "https://common-api.wildberries.ru/api/v1/seller-info"
 
 STICKER_W, STICKER_H = 58, 40
 MAX_RETRIES = 5
@@ -85,3 +87,39 @@ class WBClient:
             json={"trbxIds": [trbx_id]},
         )
         return base64.b64decode(r.json()["stickers"][0]["file"])
+
+    async def seller_name(self) -> str:
+        r = await self._request("GET", SELLER_INFO)
+        return r.json().get("name", "")
+
+    async def product_info(self, sku: str, article: str) -> dict:
+        """Данные для стикера штрихкода из карточки товара (нужен токен с категорией «Контент»)."""
+        body = {
+            "settings": {
+                "sort": {"ascending": False},
+                "cursor": {"limit": 20},
+                "filter": {"textSearch": sku or article, "withPhoto": -1},
+            }
+        }
+        r = await self._request("POST", CARDS_LIST, json=body)
+        cards = r.json().get("cards", [])
+        card = next(
+            (c for c in cards if any(sku in (z.get("skus") or []) for z in c.get("sizes", []))),
+            next((c for c in cards if c.get("vendorCode") == article), None),
+        )
+        if not card:
+            return {}
+        size = next(
+            (z.get("techSize", "") for z in card.get("sizes", []) if sku in (z.get("skus") or [])), ""
+        )
+        color = next(
+            (", ".join(map(str, ch.get("value") or [])) for ch in card.get("characteristics", [])
+             if ch.get("name") == "Цвет"),
+            "",
+        )
+        return {
+            "title": card.get("title", ""),
+            "brand": card.get("brand", ""),
+            "color": color,
+            "size": size,
+        }
