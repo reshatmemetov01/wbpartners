@@ -16,6 +16,7 @@ SUPPLY_ADD_ORDERS = "/api/marketplace/v3/supplies/{supply_id}/orders"
 SUPPLY_TRBX = "/api/v3/supplies/{supply_id}/trbx"
 SUPPLY_TRBX_STICKERS = "/api/v3/supplies/{supply_id}/trbx/stickers"
 ORDER_STICKERS = "/api/v3/orders/stickers"
+ORDERS_STATUS = "/api/v3/orders/status"
 CARDS_LIST = "https://content-api.wildberries.ru/content/v2/get/cards/list"
 SELLER_INFO = "https://common-api.wildberries.ru/api/v1/seller-info"
 
@@ -87,6 +88,17 @@ class WBClient:
             json={"trbxIds": [trbx_id]},
         )
         return base64.b64decode(r.json()["stickers"][0]["file"])
+
+    async def orders_status(self, order_ids: list[int]) -> dict[int, str]:
+        """supplierStatus заказов: new / confirm (на сборке) / complete (в доставке) / cancel."""
+        out: dict[int, str] = {}
+        for i in range(0, len(order_ids), 1000):
+            r = await self._request(
+                "POST", ORDERS_STATUS, json={"orders": order_ids[i : i + 1000]}
+            )
+            for o in r.json().get("orders", []):
+                out[o["id"]] = o.get("supplierStatus", "")
+        return out
 
     async def seller_name(self) -> str:
         r = await self._request("GET", SELLER_INFO)

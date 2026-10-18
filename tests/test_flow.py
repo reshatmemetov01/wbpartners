@@ -71,3 +71,42 @@ async def test_stale_supply_is_recreated_on_404():
     db.set_supply(5, "WB-GI-STALE")
     await move_to_assembly(wb, db, ORDER)
     assert db.get(5)["supply_id"] == "WB-GI-1" and db.get(5)["added"] == 1
+
+
+class StatusWB:
+    def __init__(self, statuses=None, fail=False):
+        self.statuses, self.fail = statuses or {}, fail
+
+    async def orders_status(self, ids):
+        if self.fail:
+            raise WBError("boom", 500)
+        return {i: self.statuses[i] for i in ids if i in self.statuses}
+
+
+def _db_with(*ids):
+    db = Db(":memory:")
+    for i in ids:
+        db.ensure(i, "A", "1")
+        db.set_supply(i, f"S{i}")
+        db.set_added(i)
+        db.set_trbx(i, f"T{i}")
+    return db
+
+
+@pytest.mark.asyncio
+async def test_refresh_removes_shipped_and_cancelled():
+    from wbbot.service import refresh_assembling
+
+    db = _db_with(1, 2, 3)
+    rows = await refresh_assembling(StatusWB({1: "confirm", 2: "complete", 3: "cancel"}), db)
+    assert [r["order_id"] for r in rows] == [1]
+    assert [r["order_id"] for r in db.assembling()] == [1]
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_everything_when_wb_fails():
+    from wbbot.service import refresh_assembling
+
+    db = _db_with(1, 2)
+    rows = await refresh_assembling(StatusWB(fail=True), db)
+    assert len(rows) == 2 and len(db.assembling()) == 2

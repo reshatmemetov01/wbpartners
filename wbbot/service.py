@@ -40,3 +40,24 @@ async def move_to_assembly(wb: WBClient, db: Db, order: dict) -> str:
     if not row["trbx_id"]:
         db.set_trbx(oid, await wb.create_box(row["supply_id"]))
     return db.get(oid)["supply_id"]
+
+
+LEFT_ASSEMBLY = {"complete", "cancel"}
+
+
+async def refresh_assembling(wb: WBClient, db: Db) -> list:
+    """Список «На сборке» без заказов, которые уже переданы в доставку или отменены.
+
+    При сбое запроса к WB возвращает список из базы без изменений.
+    """
+    rows = db.assembling()
+    if not rows:
+        return rows
+    try:
+        statuses = await wb.orders_status([r["order_id"] for r in rows])
+    except WBError:
+        return rows
+    gone = [r["order_id"] for r in rows if statuses.get(r["order_id"]) in LEFT_ASSEMBLY]
+    if gone:
+        db.remove(gone)
+    return [r for r in rows if r["order_id"] not in gone]

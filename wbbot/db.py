@@ -47,6 +47,10 @@ class Db:
         self._c.execute(f"UPDATE items SET {col}=? WHERE order_id=?", (val, order_id))
         self._c.commit()
 
+    def remove(self, order_ids: list[int]) -> None:
+        self._c.executemany("DELETE FROM items WHERE order_id=?", [(i,) for i in order_ids])
+        self._c.commit()
+
     def assembling(self) -> list[sqlite3.Row]:
         """Заказы, полностью перенесённые на сборку (поставка + заказ + грузоместо)."""
         return self._c.execute(

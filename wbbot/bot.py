@@ -16,7 +16,7 @@ from aiogram.types import (
 from .config import Config, load_config
 from .db import Db
 from .pdf import build_pdf
-from .service import move_to_assembly
+from .service import move_to_assembly, refresh_assembling
 from .wb import WBClient, WBError
 
 MENU = ReplyKeyboardMarkup(
@@ -99,7 +99,7 @@ def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
 
     @r.message(F.text == "На сборке")
     async def assembling(m: Message):
-        rows = db.assembling()
+        rows = await refresh_assembling(wb, db)
         if not rows:
             return await m.answer("На сборке ничего нет.")
         text = "На сборке:\n" + "\n".join(
@@ -110,7 +110,9 @@ def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
     @r.callback_query(F.data == "stickers")
     async def stickers(cb: CallbackQuery):
         await cb.answer("Собираю PDF…")
-        rows = db.assembling()
+        rows = await refresh_assembling(wb, db)
+        if not rows:
+            return await cb.message.answer("На сборке ничего нет.")
         warn = None
         try:
             seller = await wb.seller_name()
