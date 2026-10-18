@@ -17,6 +17,7 @@ SUPPLY_TRBX = "/api/v3/supplies/{supply_id}/trbx"
 SUPPLY_TRBX_STICKERS = "/api/v3/supplies/{supply_id}/trbx/stickers"
 ORDER_STICKERS = "/api/v3/orders/stickers"
 ORDERS_STATUS = "/api/v3/orders/status"
+SUPPLY_SHIPPING_METHOD = "/api/marketplace/v3/fbs/supplies/shipping-method"
 SUPPLY_DELIVER = "/api/v3/supplies/{supply_id}/deliver"
 CARDS_LIST = "https://content-api.wildberries.ru/content/v2/get/cards/list"
 SELLER_INFO = "https://common-api.wildberries.ru/api/v1/seller-info"
@@ -104,6 +105,27 @@ class WBClient:
             )
             for o in r.json().get("orders", []):
                 out[o["id"]] = o.get("supplierStatus", "")
+        return out
+
+    async def set_shipping(
+        self, supply_ids: list[str], point_id: int, shipping_type: str, shipping_dt: str
+    ) -> dict[str, str | None]:
+        """Параметры отгрузки до передачи в доставку. Возвращает {supplyId: None | текст ошибки}."""
+        out: dict[str, str | None] = {}
+        for i in range(0, len(supply_ids), 100):
+            data = [
+                {
+                    "supplyId": sid,
+                    "shippingPointId": point_id,
+                    "shippingType": shipping_type,
+                    "shippingDt": shipping_dt,
+                }
+                for sid in supply_ids[i : i + 100]
+            ]
+            r = await self._request("PATCH", SUPPLY_SHIPPING_METHOD, json={"data": data})
+            for res in r.json().get("results", []):
+                err = res.get("error")
+                out[res["supplyId"]] = None if res.get("success") or not err else str(err.get("detail", err))
         return out
 
     async def deliver(self, supply_id: str) -> None:

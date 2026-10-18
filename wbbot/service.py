@@ -63,10 +63,29 @@ async def refresh_assembling(wb: WBClient, db: Db) -> list:
     return [r for r in rows if r["order_id"] not in gone]
 
 
-async def deliver_all(wb: WBClient, db: Db, rows: list) -> tuple[int, list[str]]:
-    """Передаёт поставки в доставку; успешно переданные убирает из списка «На сборке»."""
+async def deliver_all(
+    wb: WBClient, db: Db, rows: list, shipping: dict | None = None
+) -> tuple[int, list[str]]:
+    """Устанавливает параметры отгрузки (если заданы), передаёт поставки в доставку
+    и убирает успешно переданные из списка «На сборке».
+
+    shipping: {"point_id": int, "type": str, "dt": "YYYY-MM-DD"} или None.
+    """
     done, errors = [], []
+    blocked: dict[str, str] = {}
+    if shipping:
+        try:
+            res = await wb.set_shipping(
+                [r["supply_id"] for r in rows], shipping["point_id"], shipping["type"], shipping["dt"]
+            )
+        except WBError as e:
+            return 0, [f"Параметры отгрузки: {e}"]
+        # SupplyAlreadyScanned — параметры уже зафиксированы, передаём как есть
+        blocked = {k: v for k, v in res.items() if v and v != "SupplyAlreadyScanned"}
     for r in rows:
+        if r["supply_id"] in blocked:
+            errors.append(f"#{r['order_id']} ({r['supply_id']}): параметры отгрузки: {blocked[r['supply_id']]}")
+            continue
         try:
             await wb.deliver(r["supply_id"])
             done.append(r["order_id"])

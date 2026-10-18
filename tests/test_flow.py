@@ -113,8 +113,12 @@ async def test_refresh_keeps_everything_when_wb_fails():
 
 
 class DeliverWB:
-    def __init__(self, bad=()):
-        self.bad, self.sent = set(bad), []
+    def __init__(self, bad=(), ship_errors=None):
+        self.bad, self.sent, self.ship_errors, self.ship_args = set(bad), [], ship_errors or {}, None
+
+    async def set_shipping(self, ids, point, typ, dt):
+        self.ship_args = (ids, point, typ, dt)
+        return {i: self.ship_errors.get(i) for i in ids}
 
     async def deliver(self, supply_id):
         if supply_id in self.bad:
@@ -130,4 +134,18 @@ async def test_deliver_all_removes_only_delivered():
     wb = DeliverWB(bad={"S2"})
     ok, errors = await deliver_all(wb, db, db.assembling())
     assert ok == 2 and len(errors) == 1 and "#2" in errors[0]
+    assert [r["order_id"] for r in db.assembling()] == [2]
+
+
+@pytest.mark.asyncio
+async def test_shipping_params_set_before_deliver_and_errors_block():
+    from wbbot.service import deliver_all
+
+    db = _db_with(1, 2, 3)
+    wb = DeliverWB(ship_errors={"S2": "InvalidShippingDt", "S3": "SupplyAlreadyScanned"})
+    ship = {"point_id": 100, "type": "selfShipping", "dt": "2026-10-18"}
+    ok, errors = await deliver_all(wb, db, db.assembling(), ship)
+    assert wb.ship_args == (["S1", "S2", "S3"], 100, "selfShipping", "2026-10-18")
+    assert wb.sent == ["S1", "S3"] and ok == 2
+    assert len(errors) == 1 and "InvalidShippingDt" in errors[0]
     assert [r["order_id"] for r in db.assembling()] == [2]

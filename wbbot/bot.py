@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import CommandStart
@@ -133,7 +134,15 @@ def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
         await cb.message.edit_text("Передаю в доставку…")
         await cb.answer()
         rows = await refresh_assembling(wb, db)
-        ok, errors = await deliver_all(wb, db, rows)
+        shipping = None
+        if cfg.shipping_point_id:
+            msk = datetime.now(timezone(timedelta(hours=3))) + timedelta(days=cfg.shipping_days)
+            shipping = {
+                "point_id": cfg.shipping_point_id,
+                "type": cfg.shipping_type,
+                "dt": msk.strftime("%Y-%m-%d"),
+            }
+        ok, errors = await deliver_all(wb, db, rows, shipping)
         msg = f"Передано в доставку: {ok}"
         if errors:
             msg += "\nОшибки:\n" + "\n".join(errors)[:3000]
