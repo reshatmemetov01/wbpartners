@@ -10,6 +10,7 @@ class Config:
     admin_id: int
     wb_token: str
     db_path: str
+    seller_name: str = ""
 
 
 def load_config() -> Config:
@@ -19,4 +20,5 @@ def load_config() -> Config:
         admin_id=int(os.environ["ADMIN_ID"]),
         wb_token=os.environ["WB_TOKEN"],
         db_path=os.environ.get("DB_PATH", "wbbot.db"),
+        seller_name=os.environ.get("SELLER_NAME", ""),
     )

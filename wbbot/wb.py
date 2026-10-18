@@ -22,6 +22,7 @@ SELLER_INFO = "https://common-api.wildberries.ru/api/v1/seller-info"
 
 STICKER_W, STICKER_H = 58, 40
 MAX_RETRIES = 5
+MAX_WAIT = 20  # максимум секунд ожидания перед повтором при 429
 
 
 class WBError(RuntimeError):
@@ -39,11 +40,15 @@ class WBClient:
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _request(self, method: str, url: str, **kw) -> httpx.Response:
-        for attempt in range(MAX_RETRIES):
+    async def _request(self, method: str, url: str, retries: int = MAX_RETRIES, **kw) -> httpx.Response:
+        for attempt in range(retries):
             r = await self._http.request(method, url, **kw)
             if r.status_code == 429:
-                await asyncio.sleep(float(r.headers.get("X-Ratelimit-Retry", 1)) + attempt)
+                try:
+                    wait = float(r.headers.get("X-Ratelimit-Retry", 1))
+                except ValueError:
+                    wait = 1.0
+                await asyncio.sleep(min(wait + attempt, MAX_WAIT))
                 continue
             if r.status_code >= 400:
                 raise WBError(f"{method} {url} -> {r.status_code}: {r.text[:300]}", r.status_code)
@@ -101,7 +106,7 @@ class WBClient:
         return out
 
     async def seller_name(self) -> str:
-        r = await self._request("GET", SELLER_INFO)
+        r = await self._request("GET", SELLER_INFO, retries=1)
         return r.json().get("name", "")
 
     async def product_info(self, sku: str, article: str) -> dict:

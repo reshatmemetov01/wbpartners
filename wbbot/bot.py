@@ -38,6 +38,7 @@ def order_line(o: dict) -> str:
 def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
     r = Router()
     info_cache: dict[str, dict] = {}
+    seller_cache: dict[str, str] = {}
     r.message.filter(F.from_user.id == cfg.admin_id)
     r.callback_query.filter(F.from_user.id == cfg.admin_id)
 
@@ -114,10 +115,13 @@ def build_router(cfg: Config, wb: WBClient, db: Db) -> Router:
         if not rows:
             return await cb.message.answer("На сборке ничего нет.")
         warn = None
-        try:
-            seller = await wb.seller_name()
-        except WBError as e:
-            seller, warn = "", f"Не удалось получить имя продавца: {e}"
+        await cb.message.answer(f"Собираю стикеры для {len(rows)} поставок, это может занять пару минут…")
+        seller = cfg.seller_name or seller_cache.get("name", "")
+        if not seller:
+            try:
+                seller = seller_cache["name"] = await wb.seller_name()
+            except WBError:
+                warn = "Не удалось получить имя продавца (лимит WB). Укажите SELLER_NAME в .env."
         try:
             data = []
             for x in rows:
