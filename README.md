@@ -20,10 +20,20 @@
 cp .env.example .env   # BOT_TOKEN, ADMIN_ID, WB_TOKEN (категория «Маркетплейс»)
 ```
 
-## Запуск на сервере (через Termius)
+## Запуск в Docker (рекомендуется)
+```
+mkdir -p data              # здесь хранится база (переживает перезапуски)
+cp .env.example .env && nano .env
+docker compose up -d --build
+docker compose logs -f     # логи; выход Ctrl+C (бот продолжит работать)
+```
+Остановить: `docker compose down`. Обновить: `git pull && docker compose up -d --build`.
+Бот сам поднимается после перезагрузки сервера (`restart: unless-stopped`).
+
+## Запуск на сервере без Docker (через Termius)
 ```
 git clone <repo> && cd wbpartners
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt  # для тестов: requirements-dev.txt
 cp .env.example .env && nano .env
 .venv/bin/python -m wbbot
 ```
