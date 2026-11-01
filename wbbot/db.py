@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS items (
     sku       TEXT NOT NULL DEFAULT '',
     supply_id TEXT,
     added     INTEGER NOT NULL DEFAULT 0,
-    trbx_id   TEXT
+    trbx_id   TEXT,
+    account   TEXT NOT NULL DEFAULT '1'
 );
 """
 
@@ -17,14 +18,18 @@ class Db:
         self._c = sqlite3.connect(path)
         self._c.row_factory = sqlite3.Row
         self._c.executescript(SCHEMA)
+        cols = {r["name"] for r in self._c.execute("PRAGMA table_info(items)")}
+        if "account" not in cols:  # база от версии с одним аккаунтом
+            self._c.execute("ALTER TABLE items ADD COLUMN account TEXT NOT NULL DEFAULT '1'")
+            self._c.commit()
 
     def get(self, order_id: int) -> sqlite3.Row | None:
         return self._c.execute("SELECT * FROM items WHERE order_id=?", (order_id,)).fetchone()
 
-    def ensure(self, order_id: int, article: str, sku: str) -> None:
+    def ensure(self, order_id: int, article: str, sku: str, account: str = "1") -> None:
         self._c.execute(
-            "INSERT OR IGNORE INTO items(order_id, article, sku) VALUES (?,?,?)",
-            (order_id, article, sku),
+            "INSERT OR IGNORE INTO items(order_id, article, sku, account) VALUES (?,?,?,?)",
+            (order_id, article, sku, account),
         )
         self._c.commit()
 
@@ -51,8 +56,13 @@ class Db:
         self._c.executemany("DELETE FROM items WHERE order_id=?", [(i,) for i in order_ids])
         self._c.commit()
 
-    def assembling(self) -> list[sqlite3.Row]:
-        """Заказы, полностью перенесённые на сборку (поставка + заказ + грузоместо)."""
-        return self._c.execute(
-            "SELECT * FROM items WHERE added=1 AND trbx_id IS NOT NULL ORDER BY order_id"
-        ).fetchall()
+    def assembling(self, account: str | None = None) -> list[sqlite3.Row]:
+        """Заказы, полностью перенесённые на сборку (поставка + заказ + грузоместо).
+
+        account — только заказы этого аккаунта; None — всех.
+        """
+        sql = "SELECT * FROM items WHERE added=1 AND trbx_id IS NOT NULL"
+        args: tuple = ()
+        if account is not None:
+            sql, args = sql + " AND account=?", (account,)
+        return self._c.execute(sql + " ORDER BY order_id", args).fetchall()

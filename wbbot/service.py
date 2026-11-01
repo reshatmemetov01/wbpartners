@@ -11,14 +11,14 @@ def order_sku(order: dict) -> str:
     return str(skus[0]) if skus else ""
 
 
-async def move_to_assembly(wb: WBClient, db: Db, order: dict) -> str:
+async def move_to_assembly(wb: WBClient, db: Db, order: dict, account: str = "1") -> str:
     """Создаёт поставку (имя = артикул), кладёт в неё заказ и создаёт 1 грузоместо.
 
     Каждый шаг фиксируется в БД, поэтому повторный вызов после сбоя
     продолжает с места остановки и не плодит дубли поставок.
     """
     oid = order["id"]
-    db.ensure(oid, order_article(order), order_sku(order))
+    db.ensure(oid, order_article(order), order_sku(order), account)
     row = db.get(oid)
     for attempt in (1, 2):
         if not row["supply_id"]:
@@ -45,12 +45,12 @@ async def move_to_assembly(wb: WBClient, db: Db, order: dict) -> str:
 LEFT_ASSEMBLY = {"complete", "cancel"}
 
 
-async def refresh_assembling(wb: WBClient, db: Db) -> list:
+async def refresh_assembling(wb: WBClient, db: Db, account: str | None = None) -> list:
     """Список «На сборке» без заказов, которые уже переданы в доставку или отменены.
 
     При сбое запроса к WB возвращает список из базы без изменений.
     """
-    rows = db.assembling()
+    rows = db.assembling(account)
     if not rows:
         return rows
     try:

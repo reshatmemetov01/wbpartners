@@ -149,3 +149,50 @@ async def test_shipping_params_set_before_deliver_and_errors_block():
     assert wb.sent == ["S1", "S3"] and ok == 2
     assert len(errors) == 1 and "InvalidShippingDt" in errors[0]
     assert [r["order_id"] for r in db.assembling()] == [2]
+
+
+def test_config_reads_second_account_from_suffixed_env():
+    from wbbot.config import load_config
+
+    env = {
+        "BOT_TOKEN": "b", "ADMIN_ID": "1",
+        "WB_TOKEN": "t1", "SELLER_NAME": "ИП Один", "SHIPPING_POINT_ID": "100",
+        "WB_TOKEN_2": "t2", "WB_NAME_2": "Магазин 2", "SELLER_NAME_2": "ИП Два",
+        "SHIPPING_POINT_ID_2": "200", "SHIPPING_DAYS_2": "1",
+    }
+    a1, a2 = load_config(env).accounts
+    assert (a1.id, a1.name, a1.wb_token, a1.shipping_point_id) == ("1", "Аккаунт 1", "t1", 100)
+    assert (a2.id, a2.name, a2.wb_token, a2.seller_name) == ("2", "Магазин 2", "t2", "ИП Два")
+    assert (a2.shipping_point_id, a2.shipping_days, a2.shipping_type) == (200, 1, "selfShipping")
+
+
+def test_single_account_config_still_works():
+    from wbbot.config import load_config
+
+    cfg = load_config({"BOT_TOKEN": "b", "ADMIN_ID": "1", "WB_TOKEN": "t"})
+    assert [a.id for a in cfg.accounts] == ["1"]
+
+
+def test_assembling_is_filtered_by_account():
+    db = Db(":memory:")
+    for oid, acc in ((1, "1"), (2, "2"), (3, "2")):
+        db.ensure(oid, "A", "1", acc)
+        db.set_supply(oid, f"S{oid}")
+        db.set_added(oid)
+        db.set_trbx(oid, f"T{oid}")
+    assert [r["order_id"] for r in db.assembling("2")] == [2, 3]
+    assert [r["order_id"] for r in db.assembling("1")] == [1]
+    assert len(db.assembling()) == 3
+
+
+def test_old_database_gets_account_column(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE items (order_id INTEGER PRIMARY KEY, article TEXT NOT NULL, sku TEXT NOT NULL DEFAULT '', supply_id TEXT, added INTEGER NOT NULL DEFAULT 0, trbx_id TEXT)")
+    c.execute("INSERT INTO items VALUES (7, 'A', '1', 'S7', 1, 'T7')")
+    c.commit()
+    c.close()
+    db = Db(path)
+    assert db.get(7)["account"] == "1" and len(db.assembling("1")) == 1
