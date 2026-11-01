@@ -144,7 +144,7 @@ def build_router(cfg: Config, accounts: dict[str, Account], db: Db) -> Router:
 
     @r.message(F.text == "На сборке")
     async def assembling(m: Message):
-        parts, buttons = [], [[("Получить стикеры", "stickers")]]
+        parts, buttons = [], []
         for acc in accounts.values():
             rows = await refresh_assembling(acc.wb, db, acc.id)
             if not rows:
@@ -152,8 +152,10 @@ def build_router(cfg: Config, accounts: dict[str, Account], db: Db) -> Router:
             parts.append(
                 heading(acc) + "\n".join(f"{x['article']} · заказ #{x['order_id']} · {x['supply_id']}" for x in rows)
             )
-            label = f"Передать в доставку — {acc.name}" if multi else "Передать все в доставку"
-            buttons.append([(label, f"deliver_ask:{acc.id}")])
+            buttons.append([(f"Получить стикеры — {acc.name}" if multi else "Получить стикеры", f"stickers:{acc.id}")])
+            buttons.append(
+                [(f"Передать в доставку — {acc.name}" if multi else "Передать все в доставку", f"deliver_ask:{acc.id}")]
+            )
         if not parts:
             return await m.answer("На сборке ничего нет.")
         await m.answer(("На сборке:\n" + "\n\n".join(parts))[:4000], reply_markup=ikb(*buttons))
@@ -204,47 +206,47 @@ def build_router(cfg: Config, accounts: dict[str, Account], db: Db) -> Router:
             name = seller_cache[acc.id] = await acc.wb.seller_name()
             return name, None
         except WBError:
-            return "", f"{acc.name}: не удалось получить имя продавца (лимит WB). Укажите SELLER_NAME в .env."
+            return "", "не удалось получить имя продавца (лимит WB). Укажите SELLER_NAME в .env."
 
-    @r.callback_query(F.data == "stickers")
+    @r.callback_query(F.data.startswith("stickers:"))
     async def stickers(cb: CallbackQuery):
+        acc = accounts[cb.data.split(":")[1]]
         await cb.answer("Собираю PDF…")
-        per_acc = [(acc, await refresh_assembling(acc.wb, db, acc.id)) for acc in accounts.values()]
-        per_acc = [(acc, rows) for acc, rows in per_acc if rows]
-        total = sum(len(rows) for _, rows in per_acc)
-        if not total:
-            return await cb.message.answer("На сборке ничего нет.")
-        await cb.message.answer(f"Собираю стикеры для {total} поставок, это может занять пару минут…")
+        rows = await refresh_assembling(acc.wb, db, acc.id)
+        if not rows:
+            return await cb.message.answer(f"{heading(acc)}На сборке ничего нет.")
+        await cb.message.answer(
+            f"{heading(acc)}Собираю стикеры для {len(rows)} поставок, это может занять пару минут…"
+        )
         warns, data = [], []
+        seller, warn = await _seller(acc)
+        if warn:
+            warns.append(warn)
         try:
-            for acc, rows in per_acc:
-                seller, warn = await _seller(acc)
-                if warn:
-                    warns.append(warn)
-                for x in rows:
-                    key = (acc.id, x["sku"] or x["article"])
-                    if key not in info_cache:
-                        try:
-                            info_cache[key] = await acc.wb.product_info(x["sku"], x["article"])
-                        except WBError as e:
-                            info_cache[key] = {}
-                            warns.append(f"{acc.name}: не удалось получить данные карточки (нужен токен с категорией «Контент»): {e}")
-                    data.append(
-                        {
-                            "order_png": await acc.wb.order_sticker(x["order_id"]),
-                            "sku": x["sku"],
-                            "article": x["article"],
-                            "info": {**info_cache[key], "seller": seller},
-                            "box_png": await acc.wb.box_sticker(x["supply_id"], x["trbx_id"]),
-                        }
-                    )
+            for x in rows:
+                key = (acc.id, x["sku"] or x["article"])
+                if key not in info_cache:
+                    try:
+                        info_cache[key] = await acc.wb.product_info(x["sku"], x["article"])
+                    except WBError as e:
+                        info_cache[key] = {}
+                        warns.append(f"не удалось получить данные карточки (нужен токен с категорией «Контент»): {e}")
+                data.append(
+                    {
+                        "order_png": await acc.wb.order_sticker(x["order_id"]),
+                        "sku": x["sku"],
+                        "article": x["article"],
+                        "info": {**info_cache[key], "seller": seller},
+                        "box_png": await acc.wb.box_sticker(x["supply_id"], x["trbx_id"]),
+                    }
+                )
         except WBError as e:
-            return await cb.message.answer(f"Ошибка WB: {e}")
+            return await cb.message.answer(f"{heading(acc)}Ошибка WB: {e}")
         if warns:
-            await cb.message.answer("\n".join(dict.fromkeys(warns))[:500])
+            await cb.message.answer((heading(acc) + "\n".join(dict.fromkeys(warns)))[:500])
         await cb.message.answer_document(
-            BufferedInputFile(build_pdf(data), "stickers.pdf"),
-            caption=f"Поставок: {total}, стикеров: {total * 3}",
+            BufferedInputFile(build_pdf(data), f"stickers_{acc.id}.pdf"),
+            caption=f"{acc.name}: поставок {len(rows)}, стикеров {len(rows) * 3}" if multi else f"Поставок: {len(rows)}, стикеров: {len(rows) * 3}",
         )
 
     return r
