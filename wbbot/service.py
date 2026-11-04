@@ -1,3 +1,5 @@
+from .config import AccountConfig
+from .crypto import Crypto, token_hash
 from .db import Db
 from .wb import WBClient, WBError
 
@@ -94,3 +96,19 @@ async def deliver_all(
     if done:
         db.remove(done)
     return len(done), errors
+
+
+def seed_legacy_stores(db: Db, crypto: Crypto, admin_id: int | None, accounts: list[AccountConfig]) -> int:
+    """Переносит аккаунты из .env в базу владельцу (ADMIN_ID), если магазинов ещё нет.
+
+    id магазина = номер аккаунта, поэтому заказы «На сборке» из прошлых версий остаются на месте.
+    """
+    if not admin_id or not accounts or db.any_stores():
+        return 0
+    for a in accounts:
+        db.add_store(
+            admin_id, a.name, crypto.encrypt(a.wb_token), token_hash(a.wb_token), a.seller_name,
+            store_id=int(a.id), shipping_point_id=a.shipping_point_id,
+            shipping_type=a.shipping_type, shipping_days=a.shipping_days,
+        )
+    return len(accounts)

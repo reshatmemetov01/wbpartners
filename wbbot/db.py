@@ -10,6 +10,18 @@ CREATE TABLE IF NOT EXISTS items (
     trbx_id   TEXT,
     account   TEXT NOT NULL DEFAULT '1'
 );
+CREATE TABLE IF NOT EXISTS stores (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_id             INTEGER NOT NULL,
+    name              TEXT NOT NULL,
+    token             TEXT NOT NULL,   -- зашифрован
+    token_hash        TEXT NOT NULL,
+    seller_name       TEXT NOT NULL DEFAULT '',
+    shipping_point_id INTEGER,
+    shipping_type     TEXT NOT NULL DEFAULT 'selfShipping',
+    shipping_days     INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (tg_id, token_hash)
+);
 """
 
 
@@ -66,3 +78,52 @@ class Db:
         if account is not None:
             sql, args = sql + " AND account=?", (account,)
         return self._c.execute(sql + " ORDER BY order_id", args).fetchall()
+
+    # ---- магазины (аккаунты WB пользователей бота) ----
+
+    def add_store(
+        self,
+        tg_id: int,
+        name: str,
+        token_enc: str,
+        token_hash: str,
+        seller_name: str = "",
+        store_id: int | None = None,
+        shipping_point_id: int | None = None,
+        shipping_type: str = "selfShipping",
+        shipping_days: int = 0,
+    ) -> int:
+        cur = self._c.execute(
+            "INSERT INTO stores(id, tg_id, name, token, token_hash, seller_name,"
+            " shipping_point_id, shipping_type, shipping_days) VALUES (?,?,?,?,?,?,?,?,?)",
+            (store_id, tg_id, name, token_enc, token_hash, seller_name,
+             shipping_point_id, shipping_type, shipping_days),
+        )
+        self._c.commit()
+        return cur.lastrowid
+
+    def stores(self, tg_id: int) -> list[sqlite3.Row]:
+        return self._c.execute("SELECT * FROM stores WHERE tg_id=? ORDER BY id", (tg_id,)).fetchall()
+
+    def store_count(self, tg_id: int) -> int:
+        return self._c.execute("SELECT COUNT(*) FROM stores WHERE tg_id=?", (tg_id,)).fetchone()[0]
+
+    def has_store_token(self, tg_id: int, token_hash: str) -> bool:
+        return self._c.execute(
+            "SELECT 1 FROM stores WHERE tg_id=? AND token_hash=?", (tg_id, token_hash)
+        ).fetchone() is not None
+
+    def any_stores(self) -> bool:
+        return self._c.execute("SELECT 1 FROM stores LIMIT 1").fetchone() is not None
+
+    def set_seller_name(self, store_id: int, name: str) -> None:
+        self._c.execute("UPDATE stores SET seller_name=? WHERE id=?", (name, store_id))
+        self._c.commit()
+
+    def delete_store(self, store_id: int, tg_id: int) -> bool:
+        """Удаляет магазин (вместе с токеном) и его заказы из списка «На сборке» бота."""
+        cur = self._c.execute("DELETE FROM stores WHERE id=? AND tg_id=?", (store_id, tg_id))
+        if cur.rowcount:
+            self._c.execute("DELETE FROM items WHERE account=?", (str(store_id),))
+        self._c.commit()
+        return bool(cur.rowcount)

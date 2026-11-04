@@ -21,9 +21,10 @@ class AccountConfig:
 @dataclass(frozen=True)
 class Config:
     bot_token: str
-    admin_id: int
     db_path: str
+    admin_id: int | None = None  # владелец «старых» аккаунтов из .env (миграция при первом запуске)
     accounts: list[AccountConfig] = field(default_factory=list)
+    max_stores: int = 5  # магазинов на пользователя
 
 
 def _account(env: Mapping[str, str], n: int) -> AccountConfig | None:
@@ -45,10 +46,7 @@ def _account(env: Mapping[str, str], n: int) -> AccountConfig | None:
 
 
 def load_accounts(env: Mapping[str, str]) -> list[AccountConfig]:
-    accounts = [a for n in range(1, MAX_ACCOUNTS + 1) if (a := _account(env, n))]
-    if not accounts:
-        raise KeyError("WB_TOKEN")
-    return accounts
+    return [a for n in range(1, MAX_ACCOUNTS + 1) if (a := _account(env, n))]
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -57,7 +55,8 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         env = os.environ
     return Config(
         bot_token=env["BOT_TOKEN"],
-        admin_id=int(env["ADMIN_ID"]),
         db_path=env.get("DB_PATH", "wbbot.db"),
+        admin_id=int(env["ADMIN_ID"]) if env.get("ADMIN_ID") else None,
         accounts=load_accounts(env),
+        max_stores=int(env.get("MAX_STORES") or 5),
     )

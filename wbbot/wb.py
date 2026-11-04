@@ -131,6 +131,19 @@ class WBClient:
     async def deliver(self, supply_id: str) -> None:
         await self._request("PATCH", SUPPLY_DELIVER.format(supply_id=supply_id))
 
+    async def ping(self) -> None:
+        """Проверка токена: доступ к Marketplace API (401 — токен неверный, 403 — нет категории)."""
+        await self._request("GET", NEW_ORDERS, retries=2)
+
+    async def has_content_access(self) -> bool | None:
+        """Есть ли доступ к API «Контент»; None — определить не удалось (лимит и т.п.)."""
+        body = {"settings": {"cursor": {"limit": 1}, "filter": {"withPhoto": -1}}}
+        try:
+            await self._request("POST", CARDS_LIST, retries=1, json=body)
+            return True
+        except WBError as e:
+            return False if e.status in (401, 403) else None
+
     async def seller_name(self) -> str:
         r = await self._request("GET", SELLER_INFO, retries=1)
         return r.json().get("name", "")
