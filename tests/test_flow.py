@@ -196,3 +196,34 @@ def test_old_database_gets_account_column(tmp_path):
     c.close()
     db = Db(path)
     assert db.get(7)["account"] == "1" and len(db.assembling("1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_deliver_drops_empty_supplies_from_list():
+    from wbbot.service import deliver_all
+
+    class EmptyWB(DeliverWB):
+        async def deliver(self, supply_id):
+            if supply_id == "S2":
+                raise WBError('409: {"code":"SupplyHasZeroOrders"}', 409)
+            await super().deliver(supply_id)
+
+    db = _db_with(1, 2)
+    ok, errors = await deliver_all(EmptyWB(), db, db.assembling())
+    assert ok == 1 and len(errors) == 1 and "пуста" in errors[0]
+    assert db.assembling() == []  # пустая поставка больше не висит в списке
+
+
+@pytest.mark.asyncio
+async def test_orders_status_treats_buyer_cancel_as_gone():
+    import httpx
+    from wbbot.wb import WBClient
+
+    def handler(request):
+        return httpx.Response(200, json={"orders": [
+            {"id": 1, "supplierStatus": "confirm", "wbStatus": "waiting"},
+            {"id": 2, "supplierStatus": "confirm", "wbStatus": "canceled_by_client"},
+        ]})
+
+    wb = WBClient("t", httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler)))
+    assert await wb.orders_status([1, 2]) == {1: "confirm", 2: "cancel"}

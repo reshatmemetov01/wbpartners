@@ -73,7 +73,7 @@ async def deliver_all(
 
     shipping: {"point_id": int, "type": str, "dt": "YYYY-MM-DD"} или None.
     """
-    done, errors = [], []
+    done, errors, stale = [], [], []
     blocked: dict[str, str] = {}
     if shipping:
         try:
@@ -92,9 +92,16 @@ async def deliver_all(
             await wb.deliver(r["supply_id"])
             done.append(r["order_id"])
         except WBError as e:
-            errors.append(f"#{r['order_id']} ({r['supply_id']}): {e}")
-    if done:
-        db.remove(done)
+            if e.status == 409 and "SupplyHasZeroOrders" in str(e):
+                # заказ отменён или перемещён в другую поставку — передавать нечего
+                stale.append(r["order_id"])
+                errors.append(
+                    f"#{r['order_id']} ({r['supply_id']}): поставка пуста (заказ отменён или перемещён), убрана из списка"
+                )
+            else:
+                errors.append(f"#{r['order_id']} ({r['supply_id']}): {e}")
+    if done or stale:
+        db.remove(done + stale)
     return len(done), errors
 
 

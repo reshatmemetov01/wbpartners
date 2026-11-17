@@ -22,6 +22,7 @@ SUPPLY_DELIVER = "/api/v3/supplies/{supply_id}/deliver"
 CARDS_LIST = "https://content-api.wildberries.ru/content/v2/get/cards/list"
 SELLER_INFO = "https://common-api.wildberries.ru/api/v1/seller-info"
 
+CANCELED_WB_STATUSES = {"canceled", "canceled_by_client", "declined_by_client"}
 STICKER_W, STICKER_H = 58, 40
 MAX_RETRIES = 5
 MAX_WAIT = 20  # максимум секунд ожидания перед повтором при 429
@@ -104,7 +105,10 @@ class WBClient:
                 "POST", ORDERS_STATUS, json={"orders": order_ids[i : i + 1000]}
             )
             for o in r.json().get("orders", []):
-                out[o["id"]] = o.get("supplierStatus", "")
+                status = o.get("supplierStatus", "")
+                if o.get("wbStatus") in CANCELED_WB_STATUSES:  # отмена покупателем/WB не меняет supplierStatus сразу
+                    status = "cancel"
+                out[o["id"]] = status
         return out
 
     async def set_shipping(
