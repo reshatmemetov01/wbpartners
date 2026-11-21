@@ -73,36 +73,70 @@ async def deliver_all(
 
     shipping: {"point_id": int, "type": str, "dt": "YYYY-MM-DD"} или None.
     """
+    by_supply: dict[str, list] = {}
+    for r in rows:  # в поставке из кабинета WB может быть несколько заказов
+        by_supply.setdefault(r["supply_id"], []).append(r)
     done, errors, stale = [], [], []
     blocked: dict[str, str] = {}
     if shipping:
         try:
             res = await wb.set_shipping(
-                [r["supply_id"] for r in rows], shipping["point_id"], shipping["type"], shipping["dt"]
+                list(by_supply), shipping["point_id"], shipping["type"], shipping["dt"]
             )
         except WBError as e:
             return 0, [f"Параметры отгрузки: {e}"]
         # SupplyAlreadyScanned — параметры уже зафиксированы, передаём как есть
         blocked = {k: v for k, v in res.items() if v and v != "SupplyAlreadyScanned"}
-    for r in rows:
-        if r["supply_id"] in blocked:
-            errors.append(f"#{r['order_id']} ({r['supply_id']}): параметры отгрузки: {blocked[r['supply_id']]}")
+    for sid, group in by_supply.items():
+        ids = [r["order_id"] for r in group]
+        label = ", ".join(f"#{i}" for i in ids) + f" ({sid})"
+        if sid in blocked:
+            errors.append(f"{label}: параметры отгрузки: {blocked[sid]}")
             continue
         try:
-            await wb.deliver(r["supply_id"])
-            done.append(r["order_id"])
+            await wb.deliver(sid)
+            done += ids
         except WBError as e:
             if e.status == 409 and "SupplyHasZeroOrders" in str(e):
                 # заказ отменён или перемещён в другую поставку — передавать нечего
-                stale.append(r["order_id"])
-                errors.append(
-                    f"#{r['order_id']} ({r['supply_id']}): поставка пуста (заказ отменён или перемещён), убрана из списка"
-                )
+                stale += ids
+                errors.append(f"{label}: поставка пуста (заказ отменён или перемещён), убрана из списка")
             else:
-                errors.append(f"#{r['order_id']} ({r['supply_id']}): {e}")
+                errors.append(f"{label}: {e}")
     if done or stale:
         db.remove(done + stale)
-    return len(done), errors
+    return len({r["supply_id"] for r in rows if r["order_id"] in done}), errors
+
+
+async def import_assembling(wb: WBClient, db: Db, account: str = "1") -> tuple[int, list[str]]:
+    """Находит в WB заказы, которые уже на сборке (в поставке, статус confirm), и добавляет их
+    в список «На сборке» бота — например, после переезда на новую базу или если заказы
+    переносили на сборку в кабинете WB. Если в поставке нет грузоместа, создаёт одно.
+    """
+    orders = [o for o in await wb.orders_since(30) if o.get("supplyId") and db.get(o["id"]) is None]
+    if not orders:
+        return 0, []
+    statuses = await wb.orders_status([o["id"] for o in orders])
+    orders = [o for o in orders if statuses.get(o["id"]) == "confirm"]
+    added, errors, boxes = 0, [], {}
+    for o in orders:
+        sid = o["supplyId"]
+        if sid not in boxes:
+            try:
+                found = await wb.supply_boxes(sid)
+                boxes[sid] = found[0] if found else await wb.create_box(sid)
+            except WBError as e:
+                boxes[sid] = None
+                errors.append(f"{sid}: не удалось получить/создать грузоместо: {e}")
+        if not boxes[sid]:
+            continue
+        oid = o["id"]
+        db.ensure(oid, order_article(o), order_sku(o), account)
+        db.set_supply(oid, sid)
+        db.set_added(oid)
+        db.set_trbx(oid, boxes[sid])
+        added += 1
+    return added, errors
 
 
 def seed_legacy_stores(db: Db, crypto: Crypto, admin_id: int | None, accounts: list[AccountConfig]) -> int:

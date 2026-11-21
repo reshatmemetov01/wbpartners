@@ -5,12 +5,14 @@ https://dev.wildberries.ru/docs/openapi/orders-fbs
 """
 import asyncio
 import base64
+import logging
 
 import httpx
 
 BASE_URL = "https://marketplace-api.wildberries.ru"
 
 NEW_ORDERS = "/api/v3/orders/new"
+ORDERS = "/api/v3/orders"
 SUPPLIES = "/api/v3/supplies"
 SUPPLY_ADD_ORDERS = "/api/marketplace/v3/supplies/{supply_id}/orders"
 SUPPLY_TRBX = "/api/v3/supplies/{supply_id}/trbx"
@@ -72,6 +74,39 @@ class WBClient:
             SUPPLY_ADD_ORDERS.format(supply_id=supply_id),
             json={"orders": [order_id]},
         )
+
+    async def orders_since(self, days: int = 30) -> list[dict]:
+        """Все сборочные задания за последние days дней (WB отдаёт максимум за 30), с пагинацией."""
+        import time
+
+        date_from, nxt, out = int(time.time()) - days * 86400, 0, []
+        while True:
+            r = await self._request(
+                "GET", ORDERS, params={"limit": 1000, "next": nxt, "dateFrom": date_from}
+            )
+            data = r.json()
+            batch = data.get("orders") or []
+            out += batch
+            nxt = data.get("next") or 0
+            if len(batch) < 1000 or not nxt:
+                return out
+
+    async def supply_boxes(self, supply_id: str) -> list[str]:
+        """ID грузомест поставки (GET .../trbx)."""
+        r = await self._request("GET", SUPPLY_TRBX.format(supply_id=supply_id))
+        data = r.json() if r.content else {}
+        if isinstance(data, dict):
+            items = data.get("trbxes") or data.get("trbx") or data.get("trbxIds") or []
+            if data and not items and not any(k in data for k in ("trbxes", "trbx", "trbxIds")):
+                logging.warning("Неожиданный ответ WB со списком грузомест %s: ключи %s", supply_id, list(data))
+        else:
+            items = data
+        ids = []
+        for it in items or []:
+            tid = it if isinstance(it, str) else (it.get("id") or it.get("trbxId")) if isinstance(it, dict) else None
+            if tid:
+                ids.append(str(tid))
+        return ids
 
     async def create_box(self, supply_id: str) -> str:
         r = await self._request(

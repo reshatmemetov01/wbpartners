@@ -227,3 +227,108 @@ async def test_orders_status_treats_buyer_cancel_as_gone():
 
     wb = WBClient("t", httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler)))
     assert await wb.orders_status([1, 2]) == {1: "confirm", 2: "cancel"}
+
+
+class ImportWB:
+    def __init__(self, orders, statuses, boxes):
+        self.orders, self.statuses, self.boxes, self.created = orders, statuses, boxes, []
+
+    async def orders_since(self, days):
+        return self.orders
+
+    async def orders_status(self, ids):
+        return {i: self.statuses[i] for i in ids}
+
+    async def supply_boxes(self, sid):
+        return self.boxes.get(sid, [])
+
+    async def create_box(self, sid):
+        self.created.append(sid)
+        return f"NEW-{sid}"
+
+
+@pytest.mark.asyncio
+async def test_import_assembling_picks_confirmed_orders_in_supplies():
+    from wbbot.service import import_assembling
+
+    orders = [
+        {"id": 1, "supplyId": "S1", "article": "A1", "skus": ["111"]},
+        {"id": 2, "supplyId": "S1", "article": "A2", "skus": ["222"]},  # та же поставка
+        {"id": 3, "supplyId": "S3", "article": "A3", "skus": []},  # без грузоместа
+        {"id": 4, "supplyId": "S4", "article": "A4"},  # уже в доставке
+        {"id": 5, "article": "A5"},  # не в поставке
+        {"id": 6, "supplyId": "S6", "article": "A6"},  # уже есть в базе
+    ]
+    wb = ImportWB(orders, {1: "confirm", 2: "confirm", 3: "confirm", 4: "complete", 6: "confirm"}, {"S1": ["TRBX-1"]})
+    db = Db(":memory:")
+    db.ensure(6, "A6", "", "7")
+    added, errors = await import_assembling(wb, db, "7")
+    assert (added, errors) == (3, [])
+    rows = {r["order_id"]: r for r in db.assembling("7")}
+    assert set(rows) == {1, 2, 3}
+    assert rows[1]["trbx_id"] == rows[2]["trbx_id"] == "TRBX-1" and rows[1]["sku"] == "111"
+    assert rows[3]["trbx_id"] == "NEW-S3" and wb.created == ["S3"]  # грузоместо создано один раз
+    assert (await import_assembling(wb, db, "7"))[0] == 0  # повторный скан не дублирует
+
+
+@pytest.mark.asyncio
+async def test_deliver_each_supply_once_even_with_several_orders():
+    from wbbot.service import deliver_all
+
+    db = Db(":memory:")
+    for oid, sid in ((1, "S1"), (2, "S1"), (3, "S3")):
+        db.ensure(oid, "A", "1")
+        db.set_supply(oid, sid)
+        db.set_added(oid)
+        db.set_trbx(oid, "T")
+    wb = DeliverWB()
+    ok, errors = await deliver_all(wb, db, db.assembling(), {"point_id": 1, "type": "selfShipping", "dt": "x"})
+    assert wb.sent == ["S1", "S3"] and wb.ship_args[0] == ["S1", "S3"]
+    assert ok == 2 and errors == [] and db.assembling() == []
+
+
+def _client(handler):
+    import httpx
+    from wbbot.wb import WBClient
+
+    return WBClient("t", httpx.AsyncClient(base_url="https://x", transport=httpx.MockTransport(handler)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload,expected", [
+    ({"trbxes": [{"id": "WB-TRBX-1"}, {"id": "WB-TRBX-2"}]}, ["WB-TRBX-1", "WB-TRBX-2"]),
+    ({"trbxIds": ["WB-TRBX-9"]}, ["WB-TRBX-9"]),
+    ({"trbxes": []}, []),
+    ([{"trbxId": "WB-TRBX-5"}], ["WB-TRBX-5"]),
+])
+async def test_supply_boxes_parses_response_variants(payload, expected):
+    import httpx
+
+    wb = _client(lambda req: httpx.Response(200, json=payload))
+    assert await wb.supply_boxes("S") == expected
+
+
+@pytest.mark.asyncio
+async def test_orders_since_paginates():
+    import httpx
+
+    calls = []
+
+    def handler(req):
+        nxt = int(req.url.params["next"])
+        calls.append(nxt)
+        if nxt == 0:
+            return httpx.Response(200, json={"next": 77, "orders": [{"id": i} for i in range(1000)]})
+        return httpx.Response(200, json={"next": 78, "orders": [{"id": 5000}]})
+
+    wb = _client(handler)
+    got = await wb.orders_since(30)
+    assert len(got) == 1001 and calls == [0, 77]
+
+
+def test_pdf_skips_missing_box_sticker():
+    item = {"order_png": png(), "sku": "2000000000001", "article": "ART-1", "box_png": png()}
+    one = build_pdf([item])
+    two = build_pdf([item, {**item, "box_png": None}])
+    count = lambda b: b.count(b"/Type /Page\n") + b.count(b"/Type /Page ")
+    assert count(two) - count(one) == 2  # второй заказ той же поставки: без стикера грузоместа

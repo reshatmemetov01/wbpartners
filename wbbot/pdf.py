@@ -64,12 +64,13 @@ def _barcode_page(c: canvas.Canvas, sku: str, article: str, info: dict) -> None:
 
 
 def build_pdf(supplies: list[dict]) -> bytes:
-    """supplies: [{order_png, sku, article, info, box_png}] -> по 3 страницы на поставку."""
+    """supplies: [{order_png, sku, article, info, box_png | None}] -> по 3 (или 2) страницы на заказ."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(W, H))
     for s in supplies:
         _png_page(c, s["order_png"])
         _barcode_page(c, s["sku"], s["article"], s.get("info", {}))
-        _png_page(c, s["box_png"])
+        if s.get("box_png"):  # стикер грузоместа — один на поставку
+            _png_page(c, s["box_png"])
     c.save()
     return buf.getvalue()

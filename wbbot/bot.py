@@ -23,7 +23,7 @@ from .config import AccountConfig, Config, load_config
 from .crypto import Crypto, load_crypto, token_hash
 from .db import Db
 from .pdf import build_pdf
-from .service import deliver_all, move_to_assembly, refresh_assembling, seed_legacy_stores
+from .service import deliver_all, import_assembling, move_to_assembly, refresh_assembling, seed_legacy_stores
 from .wb import WBClient, WBError
 
 BTN_STORE, BTN_ASSEMBLY = "Мой магазин", "На сборке"
@@ -346,26 +346,49 @@ def build_router(
     @r.message(F.text == BTN_ASSEMBLY)
     async def assembling(m: Message, state: FSMContext):
         await state.clear()
-        accounts = user_accounts(m.from_user.id)
+        await show_assembly(m, m.from_user.id)
+
+    async def show_assembly(target: Message, tg_id: int):
+        accounts = user_accounts(tg_id)
         if not accounts:
-            return await m.answer(NO_STORES, reply_markup=ikb([("Привязать магазин", "bind")]))
+            return await target.answer(NO_STORES, reply_markup=ikb([("Привязать магазин", "bind")]))
         multi = len(accounts) > 1
         parts, buttons = [], []
         for acc in accounts.values():
+            suffix = f" — {acc.name}" if multi else ""
             rows = await refresh_assembling(acc.wb, db, acc.id)
-            if not rows:
-                continue
-            parts.append(
-                heading(acc, multi)
-                + "\n".join(f"{x['article']} · заказ #{x['order_id']} · {x['supply_id']}" for x in rows)
-            )
-            buttons.append([(f"Получить стикеры — {acc.name}" if multi else "Получить стикеры", f"stickers:{acc.id}")])
-            buttons.append(
-                [(f"Передать в доставку — {acc.name}" if multi else "Передать все в доставку", f"deliver_ask:{acc.id}")]
-            )
-        if not parts:
-            return await m.answer("На сборке ничего нет.")
-        await m.answer(("На сборке:\n" + "\n\n".join(parts))[:4000], reply_markup=ikb(*buttons))
+            if rows:
+                parts.append(
+                    heading(acc, multi)
+                    + "\n".join(f"{x['article']} · заказ #{x['order_id']} · {x['supply_id']}" for x in rows)
+                )
+                buttons.append([(f"Получить стикеры{suffix}", f"stickers:{acc.id}")])
+                buttons.append([(f"Передать в доставку{suffix}" if multi else "Передать все в доставку", f"deliver_ask:{acc.id}")])
+            buttons.append([(f"🔄 Найти заказы на сборке в WB{suffix}", f"scan:{acc.id}")])
+        text = ("На сборке:\n" + "\n\n".join(parts)) if parts else (
+            "В списке бота ничего нет.\n\nЕсли заказы переносили на сборку раньше (до переезда бота "
+            "или в кабинете WB), нажмите «Найти заказы на сборке в WB»."
+        )
+        await target.answer(text[:4000], reply_markup=ikb(*buttons))
+
+    @r.callback_query(F.data.startswith("scan:"))
+    async def scan(cb: CallbackQuery):
+        accounts = user_accounts(cb.from_user.id)
+        acc = accounts.get(cb.data.split(":")[1])
+        if not acc:
+            return await cb.answer("Магазин не найден", show_alert=True)
+        await cb.answer("Ищу заказы…")
+        h = heading(acc, len(accounts) > 1)
+        await cb.message.answer(f"{h}Ищу в WB заказы на сборке за последние 30 дней…")
+        try:
+            added, errors = await import_assembling(acc.wb, db, acc.id)
+        except WBError as e:
+            return await cb.message.answer(f"{h}Ошибка WB: {e}")
+        msg = f"{h}Найдено и добавлено в список: {added}" if added else f"{h}Новых заказов на сборке не найдено."
+        if errors:
+            msg += "\nОшибки:\n" + "\n".join(errors)[:3000]
+        await cb.message.answer(msg)
+        await show_assembly(cb.message, cb.from_user.id)
 
     @r.callback_query(F.data.startswith("deliver_ask:"))
     async def deliver_ask(cb: CallbackQuery):
@@ -378,9 +401,11 @@ def build_router(
         rows = await refresh_assembling(acc.wb, db, acc.id)
         if not rows:
             return await cb.message.answer(f"{heading(acc, multi)}На сборке ничего нет.")
+        n_sup = len({x["supply_id"] for x in rows})
+        what = f"{n_sup} поставок" + (f" ({len(rows)} заказов)" if n_sup != len(rows) else "")
         await cb.message.answer(
-            f"{heading(acc, multi)}Передать в доставку {len(rows)} поставок? После этого изменить их будет нельзя.",
-            reply_markup=ikb([(f"Да, передать {len(rows)}", f"deliver_yes:{acc.id}"), ("Отмена", "deliver_no")]),
+            f"{heading(acc, multi)}Передать в доставку {what}? После этого изменить их будет нельзя.",
+            reply_markup=ikb([(f"Да, передать {n_sup}", f"deliver_yes:{acc.id}"), ("Отмена", "deliver_no")]),
         )
 
     @r.callback_query(F.data == "deliver_no")
@@ -436,9 +461,9 @@ def build_router(
         if not rows:
             return await cb.message.answer(f"{heading(acc, multi)}На сборке ничего нет.")
         await cb.message.answer(
-            f"{heading(acc, multi)}Собираю стикеры для {len(rows)} поставок, это может занять пару минут…"
+            f"{heading(acc, multi)}Собираю стикеры для {len(rows)} заказов, это может занять пару минут…"
         )
-        warns, data = [], []
+        warns, data, seen_supplies = [], [], set()
         seller, warn = await _seller(acc)
         if warn:
             warns.append(warn)
@@ -457,14 +482,18 @@ def build_router(
                         "sku": x["sku"],
                         "article": x["article"],
                         "info": {**info_cache[key], "seller": seller},
-                        "box_png": await acc.wb.box_sticker(x["supply_id"], x["trbx_id"]),
+                        "box_png": None
+                        if x["supply_id"] in seen_supplies
+                        else await acc.wb.box_sticker(x["supply_id"], x["trbx_id"]),
                     }
                 )
+                seen_supplies.add(x["supply_id"])
         except WBError as e:
             return await cb.message.answer(f"{heading(acc, multi)}Ошибка WB: {e}")
         if warns:
             await cb.message.answer((heading(acc, multi) + "\n".join(dict.fromkeys(warns)))[:500])
-        caption = f"Поставок: {len(rows)}, стикеров: {len(rows) * 3}"
+        n_stickers = sum(2 + bool(d["box_png"]) for d in data)
+        caption = f"Поставок: {len(seen_supplies)}, стикеров: {n_stickers}"
         await cb.message.answer_document(
             BufferedInputFile(build_pdf(data), f"stickers_{acc.id}.pdf"),
             caption=f"{acc.name}: {caption.lower()}" if multi else caption,
